@@ -1,0 +1,11 @@
+name: Feature request
+description: Something new to build
+labels: ["type:feature", "needs-triage"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should exist?
+      description: The outcome you want, and why it matters.
+    validations:
+      required: true

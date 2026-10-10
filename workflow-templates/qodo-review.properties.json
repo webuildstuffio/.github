@@ -1,0 +1,6 @@
+{
+  "name": "Qodo Review",
+  "description": "Qodo PR review (fleet fallback model chain; see pr-agent-settings).",
+  "iconName": "icon.png",
+  "categories": ["Code quality"]
+}

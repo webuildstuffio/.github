@@ -1,0 +1,51 @@
+name: CI
+on:
+  pull_request:
+    branches: [$default-branch]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/$default-branch' }}
+
+jobs:
+  changes:
+    if: github.event.pull_request.draft == false
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4.0.3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'app/**'
+              - 'components/**'
+              - 'lib/**'
+              - 'scripts/**'
+              - 'test/**'
+              - 'package.json'
+              - 'bun.lock'
+              - 'tsconfig.json'
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.2'
+      - run: bun install --frozen-lockfile
+      - name: Run tests
+        run: bun run test:run
+      - run: bun run build

@@ -1,0 +1,6 @@
+{
+  "name": "Security Scan",
+  "description": "gitleaks + OSV scanner caller for repo-review security-scan reusable (weekly deep scan included).",
+  "iconName": "icon.png",
+  "categories": ["Security"]
+}

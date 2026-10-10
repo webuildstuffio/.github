@@ -1,0 +1,6 @@
+{
+  "name": "Bun CI",
+  "description": "Bun-only PR gate: changes filter, frozen install, tests, build on ubicloud-standard-2.",
+  "iconName": "icon.png",
+  "categories": ["Continuous integration"]
+}

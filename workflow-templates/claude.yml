@@ -1,0 +1,159 @@
+# Claude Code Assistant v5.21
+# Triggered by @claude mentions in issues, PRs, and reviews.
+# Uses Z.AI routing (org ANTHROPIC_API_KEY is a Z.AI credential).
+#
+# v5.21 - (Sep 30 2026) Bump to v1.0.237 (Claude Code 2.1.285 — native
+#          AGENTS.md support, no CLAUDE.md symlink needed). Added job-level
+#          retry for Z.AI rate limits. Increased max-turns to 75.
+# v5.20 - Concurrency groups, AGENTS.md-first prompt.
+# v5.19 - Z.AI routing, sonnet-4-5/haiku-4-5 pins.
+
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    # Same-issue re-triggers supersede: cancel the stale run instead of
+    # billing two 30-min Claude jobs for one issue. Job-level (not
+    # workflow-level) on purpose: jobs skipped by the if: below never
+    # enter the group, so ordinary comments without a trigger
+    # cannot cancel an active run.
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write
+      statuses: write
+      checks: write
+      discussions: write
+    steps:
+      - name: Create Claude Labels if Missing
+        continue-on-error: true
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const labels = [
+              { name: '🤖 claude-working', color: 'f97316', description: 'Claude AI is currently analyzing this issue/PR' },
+              { name: '✅ claude-complete', color: '22c55e', description: 'Claude AI has successfully completed analysis' },
+              { name: '❌ claude-failed', color: 'ef4444', description: 'Claude AI encountered an error during analysis' }
+            ];
+            for (const l of labels) {
+              try {
+                const existing = await github.rest.issues.getLabel({ owner: context.repo.owner, repo: context.repo.repo, name: l.name });
+                if (existing.data.color !== l.color) {
+                  await github.rest.issues.updateLabel({ owner: context.repo.owner, repo: context.repo.repo, name: l.name, color: l.color, description: l.description });
+                }
+              } catch (e) {
+                if (e.status === 404) {
+                  try { await github.rest.issues.createLabel({ owner: context.repo.owner, repo: context.repo.repo, ...l }); } catch {}
+                }
+              }
+            }
+
+      - name: Extract Context
+        id: context
+        run: |
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            echo "issue_number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "issues" ]; then
+            echo "issue_number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "pull_request_review_comment" ] || \
+               [ "${{ github.event_name }}" = "pull_request_review" ]; then
+            echo "issue_number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "issue_number=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Add Claude Working Badge
+        if: ${{ steps.context.outputs.issue_number != '' }}
+        continue-on-error: true
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const n = '${{ steps.context.outputs.issue_number }}';
+            if (!n) return;
+            const claudeLabels = ['🤖 claude-working', '✅ claude-complete', '❌ claude-failed'];
+            try {
+              const { data: current } = await github.rest.issues.listLabelsOnIssue({ owner: context.repo.owner, repo: context.repo.repo, issue_number: n });
+              for (const label of current) {
+                if (claudeLabels.includes(label.name)) {
+                  await github.rest.issues.removeLabel({ owner: context.repo.owner, repo: context.repo.repo, issue_number: n, name: label.name });
+                }
+              }
+            } catch {}
+            await github.rest.issues.addLabels({ owner: context.repo.owner, repo: context.repo.repo, issue_number: n, labels: ['🤖 claude-working'] });
+
+      - name: Run Claude Code
+        id: claude_action
+        uses: anthropics/claude-code-action@v1.0.237
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: true
+          track_progress: true
+          prompt: |
+            Repository: ${{ github.repository }}
+            Event: ${{ github.event_name }}
+
+            Help with the task described in the issue/PR above. Complete it 100%.
+            Read AGENTS.md at the repo root first for project-specific guidelines.
+          claude_args: |
+            --max-turns 75
+            --append-system-prompt "You are a senior SWE. Read AGENTS.md at the repo root first — it has project-specific guidelines that take precedence. Security-review your changes, keep quality high, avoid overengineering. Be pragmatic: user value first."
+            --allowedTools "Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,TodoWrite,Bash(bun:*),Bash(bunx:*),Bash(oxlint:*),Bash(gh:*),Bash(git:*),Bash(node:*),Bash(npx:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(find:*),Bash(wc:*),Bash(mkdir:*),Bash(cp:*),Bash(mv:*),Bash(rm:*)"
+          settings: |
+            {
+              "env": {
+                "ANTHROPIC_AUTH_TOKEN": "${{ secrets.ANTHROPIC_API_KEY }}",
+                "ANTHROPIC_BASE_URL": "${{ vars.CLAUDE_BASE_URL || 'https://api.z.ai/api/anthropic' }}",
+                "ANTHROPIC_MODEL": "${{ vars.CLAUDE_MODEL || 'claude-sonnet-4-5' }}",
+                "ANTHROPIC_SMALL_FAST_MODEL": "${{ vars.CLAUDE_SMALL_MODEL || 'claude-haiku-4-5' }}",
+                "API_TIMEOUT_MS": "600000"
+              }
+            }
+
+      - name: Update Claude Completion Badge
+        if: always() && steps.context.outputs.issue_number != ''
+        continue-on-error: true
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const n = '${{ steps.context.outputs.issue_number }}';
+            if (!n) return;
+            const status = '${{ steps.claude_action.conclusion }}';
+            if (status === 'skipped' || status === 'cancelled') return;
+            try { await github.rest.issues.removeLabel({ owner: context.repo.owner, repo: context.repo.repo, issue_number: n, name: '🤖 claude-working' }); } catch {}
+            const label = status === 'success' ? '✅ claude-complete' : '❌ claude-failed';
+            await github.rest.issues.addLabels({ owner: context.repo.owner, repo: context.repo.repo, issue_number: n, labels: [label] });
+            if (status !== 'success') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: n,
+                body: `### ❌ Claude Error\n\nStatus: ${status}. Check [workflow logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${{ github.run_id }}).`
+              });
+            }

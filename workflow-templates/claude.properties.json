@@ -1,0 +1,6 @@
+{
+  "name": "Claude Code",
+  "description": "@claude mentions in issues, PRs and reviews (Z.AI routing, job-level concurrency).",
+  "iconName": "icon.png",
+  "categories": ["Code quality"]
+}

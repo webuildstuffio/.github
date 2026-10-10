@@ -1,0 +1,16 @@
+name: Bug report
+description: Something is broken
+labels: ["type:bug", "needs-triage"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw vs what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Steps, URL, logs, screenshots.
