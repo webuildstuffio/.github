@@ -1,4 +1,4 @@
-# Master Label Configuration v4.1
+# Master Label Configuration v4.2
 # Fleet Issue Label Schema v3 - canonical source for all webuildstuffio repos
 # Synced fleet-wide by the every-3-day labeling job (never deletes labels).
 # Priority is P0-P4 (priority-high etc. are legacy).
@@ -8,7 +8,7 @@
 # never reuse a generic name below.
 # v4.1: themes pwa + mcp promoted from repo specialties (fleet lanes).
 
-version: "4.1"
+version: "4.2"
 name: "Fleet Issue Labels"
 description: "Standard generic labels: P0-P4, type/status/theme/effort"
 
@@ -268,8 +268,18 @@ labels:
     color: "#b60205"
     description: "Worked before and broke - regression"
     category: "agent"
+  owner-decision:
+    name: "owner-decision"
+    color: "#6f42c1"
+    description: "Blocked on owner: direction/judgment call only the owner can make"
+    category: "owner"
+  owner-mustdo:
+    name: "owner-mustdo"
+    color: "#9e1b32"
+    description: "Blocked on owner: action only the owner can do (account, console, sign-in, key)"
+    category: "owner"
 
 metadata:
-  version: "4.1"
+  version: "4.2"
   max_labels_per_issue: 5
   rule: "1 priority + 1-3 type + at most 1 status:* + at most 2 themes"

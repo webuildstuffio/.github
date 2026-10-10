@@ -39,6 +39,14 @@ Sweeps skip all status:* issues.
 `claude-ready` (clear <30-min slice for @claude batches), `human-only`
 (owner judgment, never delegate), `regression`.
 
+## Owner - blocked on the owner (the owner's personal queue)
+`owner-decision` purple - a direction/judgment call only the owner can
+make. `owner-mustdo` crimson - an action only the owner can perform
+(account, console, dashboard, sign-in, API key, purchase). An issue gets
+one of these only when it is truly blocked on the owner; agents surface
+them, the owner clears them. Filter: `label:owner-decision` /
+`label:owner-mustdo` org-wide.
+
 ## Repo specialties
 Repos may add their own labels (`area:*`, `sig-*`, product/domain names) -
 untouched by fleet sync. One rule: never reuse a generic name or meaning.
