@@ -26,7 +26,7 @@ Sweeps skip all status:* issues.
 
 ## Themes - the common lanes of work (at most two, only when clear)
 `seo` `traffic` `analytics` `performance` `content` `revenue` `ux` `data`
-`infra` `cost`
+`infra` `cost` `pwa` `mcp`
 
 ## Effort - optional, only when known
 `effort:xs` <2h - `effort:s` ~half day - `effort:m` 1-2 days -
