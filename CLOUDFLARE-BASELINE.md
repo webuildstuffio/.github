@@ -53,11 +53,16 @@ incident). All its other baseline settings apply normally.
   baseline script's `new-site` mode creates them): www -> apex 301
   (path + query preserved), and a trailing-slash strip 301 for
   GET/HEAD requests.
+- A zone's www -> apex redirect lives in exactly ONE place: the
+  dynamic redirect rule. A legacy www Page Rule duplicating it is
+  drift -- the baseline audit flags it and `fix` removes the Page
+  Rule (first case: upgrade.tools, 2026-10-14).
 - **Exception:** slash-serving builds -- e.g. Workers static assets
   with `html_handling: auto-trailing-slash` -- keep their slash form
   and get NO strip rule (it would loop against the asset handler).
-- Existing zones' redirect rules stay untouched by the baseline;
-  this section governs new launches only.
+- Otherwise, existing zones' redirect rules stay untouched by the
+  baseline and the rest of this section governs new launches; the
+  duplicate-www cleanup above is the one fleet-wide exception.
 
 ## Held / owner-only
 
