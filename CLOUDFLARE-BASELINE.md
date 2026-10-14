@@ -13,7 +13,7 @@ when a new site launches.
 | Setting | Value | Why |
 |---|---|---|
 | TLS 1.3 | `zrt` (1.3 + 0-RTT) | fastest handshake, CWV/ranking signal |
-| Early Hints | on | 103 hints preload critical assets |
+| Early Hints | on** | 103 hints preload critical assets — **off** on six zones, see exception below |
 | Minimum TLS version | 1.2 | floor without cutting old crawlers/agents |
 | Always Use HTTPS | on | no HTTP serving |
 | Automatic HTTPS Rewrites | on | fixes mixed-content URLs at the edge |
@@ -31,6 +31,24 @@ when a new site launches.
 serves `ingest.webuildstuff.dev`, the token-authed CI ingest API; BFM
 challenges runner POSTs and silently breaks fleet ingest (2026-10-05
 incident). All its other baseline settings apply normally.
+
+\*\* **Exception: Early Hints stays OFF on `termlimits.ca`,
+`upgrade.tools`, `goldoutput.com`, `webuildstuff.io`, `dealt.win`
+and `powerloss.tech`** (fleet speed-audit fix, 2026-10-14). None of
+these sites emits `Link` headers with `preload` or `preconnect`
+rel types (the two Cloudflare turns into 103s), so the 103
+machinery earns nothing — and Cloudflare's Early Hints cache-probe
+subrequests (`requestSource=earlyHintsCache`,
+`originResponseStatus` 0) showed up in analytics as phantom 504s
+that polluted the speed audit (full write-up: termlimits.ca repo,
+`docs/early-hints-phantom-504s.md`). Re-enable a zone only when
+the site ships Link headers with `preload` or `preconnect` rel
+types (fleet standard: repo-template-nextjs#172). The baseline script encodes this in an
+`EARLY_HINTS_OFF` set (coded 2026-10-15): its audit treats `off`
+as compliant on these zones, and its `fix` mode sets `off`, never
+`on`. Before it was coded, one `fix` run flipped `early_hints`
+back on (upgrade.tools, 2026-10-14); removing a zone from the set
+is the deliberate way to re-enable hints.
 
 ## New-site launch checklist
 
