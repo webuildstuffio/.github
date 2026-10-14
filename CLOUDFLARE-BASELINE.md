@@ -44,6 +44,21 @@ incident). All its other baseline settings apply normally.
    `Strict-Transport-Security` header, and the DS resolves at the
    parent (`dig DS <domain>`) once DNSSEC flips `active`.
 
+## Canonical URL form (new sites)
+
+- **House form: slashless.** New builds serve canonical URLs without
+  a trailing slash (`/guide`, not `/guide/`). Frameworks that default
+  to slashless (Next.js) need nothing in the app.
+- A new slashless zone gets two edge redirect rules at launch (the
+  baseline script's `new-site` mode creates them): www -> apex 301
+  (path + query preserved), and a trailing-slash strip 301 for
+  GET/HEAD requests.
+- **Exception:** slash-serving builds -- e.g. Workers static assets
+  with `html_handling: auto-trailing-slash` -- keep their slash form
+  and get NO strip rule (it would loop against the asset handler).
+- Existing zones' redirect rules stay untouched by the baseline;
+  this section governs new launches only.
+
 ## Held / owner-only
 
 - HSTS preload-list submission (browser-hardcoded, effectively
