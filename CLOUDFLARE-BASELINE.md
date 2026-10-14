@@ -24,6 +24,7 @@ when a new site launches.
 | AI bot protections (`ai_bots_protection`, `ai_training`) | disabled | ALL crawlers allowed, incl. AI training — training inclusion feeds AI-answer citations (owner policy 2026-10-05) |
 | DNSSEC | enabled | signed DNS answers. Cloudflare-Registrar domains complete automatically (Cloudflare publishes the DS; expect hours of `pending`). External registrars: paste the DS the zone provides |
 | HSTS | on, max-age ≥ 31536000 (1y) | browsers refuse HTTP after first visit. `includeSubDomains` only after every web hostname in the zone verifies HTTPS-clean; otherwise apex-only. Preload-list submission is owner-only |
+| URL normalization | scope `both`, type `cloudflare` | canonicalizes incoming + origin-bound URLs so rules/cache see one form; never redirects and does NOT touch trailing slashes (slash policy = redirect rules / origin / worker `html_handling`) |
 | SSL mode | full / strict where the origin serves a valid cert | `flexible` is load-bearing on origins with no TLS (bankstatementsaver.com, statementsaver.com, comicgreeting.com, talkedit.ai, unlimited.land, findtracks.app) and normal on worker-served landings — never raise without verifying the origin cert first |
 
 \* **Exception: `webuildstuff.dev` — Bot Fight Mode stays OFF.** It
