@@ -60,8 +60,9 @@ incident). All its other baseline settings apply normally.
 - **Exception:** slash-serving builds -- e.g. Workers static assets
   with `html_handling: auto-trailing-slash` -- keep their slash form
   and get NO strip rule (it would loop against the asset handler).
-- Existing zones' redirect rules stay untouched by the baseline;
-  this section governs new launches only.
+- Otherwise, existing zones' redirect rules stay untouched by the
+  baseline and the rest of this section governs new launches; the
+  duplicate-www cleanup above is the one fleet-wide exception.
 
 ## Held / owner-only
 
