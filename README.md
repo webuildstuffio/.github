@@ -10,7 +10,8 @@ Default community-health + automation files for every repo in the org.
   (source of truth) and both repo templates.
 - `.github/LABELS.md` — the simple human doc for the schema.
 - `.github/workflow-templates/` — org-wide workflow templates
-  (Bun CI, Claude Code, Qodo Review, Security Scan). New repos
+  (Bun CI, Claude Code, Qodo Review, Security Scan, Deploy to
+  Cloudflare). New repos
   pick these when adding workflows; bun-only, ubicloud-standard-2.
 - `.github/ISSUE_TEMPLATE/` — default issue forms (auto-label
   type:* + needs-triage).

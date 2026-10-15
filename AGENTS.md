@@ -19,7 +19,8 @@ many repos at once — treat edits as fleet-wide, not local.
   name.
 - `workflow-templates/` — starter workflows a new repo picks
   from when adding Actions: `bun-ci.yml`, `claude.yml`,
-  `qodo-review.yml`, `security-scan.yml`, each paired with a
+  `deploy-cf.yml`, `qodo-review.yml`, `security-scan.yml`,
+  each paired with a
   `.properties.json` describing it in the template picker.
 - `.github/ISSUE_TEMPLATE/` — default issue forms:
   `bug_report.yml` (auto-labels `type:bug` + `needs-triage`)
