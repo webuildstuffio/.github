@@ -66,7 +66,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-cf-${{ github.ref }}
+  # One group per deployed Worker — deliberately NOT keyed by
+  # ref: a workflow_dispatch from any branch or tag targets the
+  # same Worker and must serialize with the default-branch
+  # deploy, or their snapshot/gate/rollback sequences interleave.
+  group: deploy-cf
   cancel-in-progress: false # never cancel an in-flight deploy
 
 jobs:
