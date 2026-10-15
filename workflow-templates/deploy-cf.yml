@@ -50,6 +50,11 @@
 #   5. Wrangler is expected as a devDependency of the repo
 #      (invoked via bunx). The app's workers_dev stays DISABLED;
 #      only the checker enables workers_dev.
+#   6. FIRST DEPLOY of a brand-new Worker: Gate 1's snapshot
+#      fails closed by design when the Worker has no existing
+#      deployment to snapshot. Bootstrap once outside this
+#      workflow (run your deploy command locally a single time)
+#      so a serving version exists, then enable the workflow.
 name: Deploy to Cloudflare
 
 on:
@@ -135,7 +140,7 @@ jobs:
           PREVIOUS_VERSION_ID=""
           SNAPSHOT_OK=""
           for attempt in $(seq 1 6); do
-            RESP=$(curl -s -w $'\n%{http_code}' \
+            RESP=$(curl -s --max-time 30 -w $'\n%{http_code}' \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$API_URL" || echo "000")
             CODE=$(printf '%s' "$RESP" | tail -n 1)
             BODY=$(printf '%s' "$RESP" | sed '$d')
@@ -190,7 +195,7 @@ jobs:
           API_BASE="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
           API_URL="${API_BASE}/workers/scripts/${SCRIPT_NAME}/deployments"
           for i in $(seq 1 12); do
-            RESP=$(curl -s -w $'\n%{http_code}' \
+            RESP=$(curl -s --max-time 30 -w $'\n%{http_code}' \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$API_URL" || echo "000")
             CODE=$(printf '%s' "$RESP" | tail -n 1)
             BODY=$(printf '%s' "$RESP" | sed '$d')
@@ -282,7 +287,7 @@ jobs:
           CHECKER_NAME: ${{ vars.CHECKER_NAME }}
         run: |
           set -euo pipefail
-          SUBDOMAIN=$(curl -s \
+          SUBDOMAIN=$(curl -s --max-time 30 \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain" \
             | jq -r '.result.subdomain // empty')
@@ -298,7 +303,7 @@ jobs:
           SAW_APP=""
           LAST_DETAIL="no attempt completed"
           for i in $(seq 1 9); do
-            RESP=$(curl -s -D /tmp/gate2-headers.txt -w $'\n%{http_code}' \
+            RESP=$(curl -s --max-time 30 -D /tmp/gate2-headers.txt -w $'\n%{http_code}' \
               -H "X-Deploy-Check-Secret: ${DEPLOY_CHECK_SECRET}" "$CHECK_URL" || true)
             CODE=$(printf '%s' "$RESP" | tail -n 1)
             BODY=$(printf '%s' "$RESP" | sed '$d')
@@ -359,15 +364,21 @@ jobs:
       # never reaches this step: gate2 exits 1 without setting
       # app_failure, so the condition stays false and only the
       # job fails.
+      # Roll back to the version captured by the pre-deploy
+      # snapshot — explicitly, not wrangler's default (the version
+      # uploaded before the latest), which can be an unrelated,
+      # unverified version when uploads exist that never served.
       - name: Rollback on failed health gate
         if: failure() && (steps.health.outcome == 'failure' || steps.gate2.outputs.app_failure == 'true')
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIOUS_VERSION_ID: ${{ steps.pre_deploy_snapshot.outputs.previous_version_id }}
         run: |
           set -euo pipefail
-          echo "Rolling back to previous Worker version..."
-          bunx wrangler rollback --message "Auto-rollback: post-deploy health gate failed" 2>&1 || true
+          echo "Rolling back to pre-deploy version ${PREVIOUS_VERSION_ID}..."
+          bunx wrangler rollback "${PREVIOUS_VERSION_ID}" \
+            --message "Auto-rollback: post-deploy health gate failed" 2>&1 || true
           echo "Rollback attempted — verify manually in the Cloudflare dashboard."
 
       - name: Release marker
