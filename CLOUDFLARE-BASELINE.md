@@ -68,11 +68,13 @@ before it was coded, one `fix` run flipped `early_hints` back on
 
 1. Zone on the Cloudflare account, nameservers live, apex + www
    proxied.
-2. Confirm the site ships `Link` preload/preconnect headers
-   (`curl -sI https://<apex>/` shows a `Link:` header). If it does
-   not, add the zone to `EARLY_HINTS_OFF` in the baseline script
-   BEFORE applying the table — hints on a headerless site earn
-   nothing and re-create the phantom-504 noise below.
+2. Confirm the site ships `Link` headers with `rel=preload` or
+   `rel=preconnect` — the only relation types Cloudflare turns
+   into 103s (a `Link:` header carrying other rel types, e.g.
+   canonical, does not count). If it ships none, add the zone to
+   `EARLY_HINTS_OFF` in the baseline script BEFORE applying the
+   table — hints on a headerless site earn nothing and re-create
+   the phantom-504 noise below.
 3. Apply the table above (dashboard or the baseline script's `fix`
    mode).
 4. Enable DNSSEC; if the registrar is external, paste the DS record
