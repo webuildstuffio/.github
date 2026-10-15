@@ -68,11 +68,16 @@ before it was coded, one `fix` run flipped `early_hints` back on
 
 1. Zone on the Cloudflare account, nameservers live, apex + www
    proxied.
-2. Apply the table above (dashboard or the baseline script's `fix`
+2. Confirm the site ships `Link` preload/preconnect headers
+   (`curl -sI https://<apex>/` shows a `Link:` header). If it does
+   not, add the zone to `EARLY_HINTS_OFF` in the baseline script
+   BEFORE applying the table — hints on a headerless site earn
+   nothing and re-create the phantom-504 noise below.
+3. Apply the table above (dashboard or the baseline script's `fix`
    mode).
-3. Enable DNSSEC; if the registrar is external, paste the DS record
+4. Enable DNSSEC; if the registrar is external, paste the DS record
    the zone generates.
-4. Verify: settings re-read at target values, apex serves the
+5. Verify: settings re-read at target values, apex serves the
    `Strict-Transport-Security` header, and the DS resolves at the
    parent (`dig DS <domain>`) once DNSSEC flips `active`.
 
