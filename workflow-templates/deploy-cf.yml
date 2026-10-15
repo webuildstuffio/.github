@@ -1,0 +1,379 @@
+# Deploy to Cloudflare — health-gated (fleet DEPLOY-STANDARD)
+#
+# Implements the fleet deploy standard in
+# gh-actions-and-skills/DEPLOY-STANDARD.md (proven live on
+# droneflightcalc, PRs #1897/#1904). A deploy is done only when
+# two bot-free gates pass; a proven-bad deploy rolls itself back:
+#   - Gate 1 (control plane): the Workers deployments API proves
+#     the just-deployed version is active at 100%.
+#   - Gate 2 (content): a tiny checker Worker fetches the app's
+#     /api/health over a service binding — inside Cloudflare,
+#     never via the public URL (Bot Fight Mode challenges
+#     runner-originated probes) — and CI asserts HTTP 200 +
+#     status "healthy" + workerVersion == Gate 1's version_id.
+# Gate failures roll back. Gate 2 PROBE failures (checker
+# unreachable / probeError) fail the job loudly but NEVER roll
+# back — the probe is broken, not the deploy.
+# ZERO steps fetch the site's own public hostname.
+#
+# SETUP (placeholder values — replace before enabling):
+#   1. Copy the checker Worker into this repo at
+#      workers/deploy-check/ — source + contract:
+#      droneflightcalc repo, workers/deploy-check/ (name it
+#      "<app>-deploy-check", service binding APP -> your Worker,
+#      upstream path hardcoded to /api/health).
+#   2. Add a health endpoint to the app per the DEPLOY-STANDARD
+#      health contract (/api/health, force-dynamic, no-store,
+#      workerVersion from a CF_VERSION_METADATA version_metadata
+#      binding). Static (Vite) apps: see the static variant in
+#      DEPLOY-STANDARD.md — emit dist/health.json {status, sha,
+#      builtAt} instead, point the checker's hardcoded path at
+#      /health.json, and assert sha == github.sha in Gate 2.
+#   3. Adapt the two marked steps below: the build command and
+#      the deploy command are repo-specific placeholders.
+#   4. Set repository variables (Settings -> Secrets and
+#      variables -> Actions -> Variables):
+#        CLOUDFLARE_ACCOUNT_ID  account that owns the Worker
+#        WORKER_NAME            Worker / script name
+#        CHECKER_NAME           optional; defaults to
+#                               "<WORKER_NAME>-deploy-check"
+#        CF_DEPLOY_ENABLED      "true" — until then this job
+#                               is inert (job-level if: below)
+#      And repository secrets:
+#        CLOUDFLARE_API_TOKEN  Workers Scripts:Edit +
+#                               Account:Read (org-shared in
+#                               most repos)
+#        DEPLOY_CHECK_SECRET   shared secret for the checker;
+#                               synced to it on every deploy run
+#        HEALTH_SECRET         app-side; gates the detailed
+#                               health view
+#   5. Wrangler is expected as a devDependency of the repo
+#      (invoked via bunx). The app's workers_dev stays DISABLED;
+#      only the checker enables workers_dev.
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [$default-branch]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cf-${{ github.ref }}
+  cancel-in-progress: false # never cancel an in-flight deploy
+
+jobs:
+  deploy:
+    name: Deploy Worker to Cloudflare
+    # Inert until the repo is configured (see SETUP step 4).
+    if: vars.CF_DEPLOY_ENABLED == 'true'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Next.js build cache. Static/Vite repos: delete this step
+      # and the purge step below (no Data Cache exists there).
+      - name: Cache Next.js build
+        uses: actions/cache@v6
+        with:
+          path: .next/cache
+          key: >-
+            ${{ runner.os }}-next-${{ hashFiles('bun.lock') }}-${{ hashFiles('src/**') }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ hashFiles('bun.lock') }}-
+            ${{ runner.os }}-next-
+
+      # .next/cache also holds Next's Data Cache (fetch-cache),
+      # whose entries persist across builds with original mtimes
+      # and are judged fresh without re-running the data read —
+      # a stale entry once baked an empty shell page into a
+      # prerender. Purge ONLY the Data Cache after restore; the
+      # webpack cache stays. See DEPLOY-STANDARD.md.
+      - name: Purge restored Next Data Cache (fetch-cache)
+        run: rm -rf .next/cache/fetch-cache
+
+      # PLACEHOLDER — replace with the repo's real build command
+      # (e.g. an OpenNext build, or `bun run build` for Vite,
+      # which must also emit dist/health.json — static variant).
+      # Prerendered content must be built against real data
+      # (e.g. a seeded local D1) or not prerendered at all.
+      - name: Build
+        run: bun run build
+
+      # Gate 1 stale-API guard: snapshot the currently-serving
+      # version BEFORE deploying. Gate 1 must later observe a
+      # DIFFERENT version_id — the "newest at 100%" predicate
+      # alone is also true of the previous deployment, so a
+      # lagging API would false-pass on the old version.
+      # FAILS CLOSED: a read counts as successful ONLY on
+      # HTTP 200 + parseable JSON + success == true + non-empty
+      # deployments + non-empty newest version_id; anything else
+      # is retried, and if it never succeeds the job fails here,
+      # BEFORE any deploy — nothing has shipped, just re-run.
+      - name: Snapshot pre-deploy version (Gate 1 guard)
+        id: pre_deploy_snapshot
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SCRIPT_NAME: ${{ vars.WORKER_NAME }}
+        run: |
+          set -euo pipefail
+          API_BASE="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+          API_URL="${API_BASE}/workers/scripts/${SCRIPT_NAME}/deployments"
+          PREVIOUS_VERSION_ID=""
+          SNAPSHOT_OK=""
+          for attempt in $(seq 1 6); do
+            RESP=$(curl -s -w $'\n%{http_code}' \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$API_URL" || echo "000")
+            CODE=$(printf '%s' "$RESP" | tail -n 1)
+            BODY=$(printf '%s' "$RESP" | sed '$d')
+            if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e '
+              .success == true
+              and (.result.deployments | type == "array" and length > 0)
+              and ((.result.deployments | sort_by(.created_on) | last | .versions[0].version_id) as $vid
+                | ($vid | type == "string" and length > 0))
+            ' >/dev/null 2>&1; then
+              PREVIOUS_VERSION_ID=$(printf '%s' "$BODY" | jq -r '
+                .result.deployments | sort_by(.created_on) | last
+                | .versions[0].version_id' 2>/dev/null || true)
+              SNAPSHOT_OK="true"
+              echo "Pre-deploy version: ${PREVIOUS_VERSION_ID}"
+              break
+            fi
+            echo "  snapshot attempt ${attempt}/6 failed: HTTP ${CODE} — not a successful deployments read"
+            if [ "$attempt" -lt 6 ]; then
+              sleep 10
+            fi
+          done
+          if [ -z "$SNAPSHOT_OK" ]; then
+            echo "Pre-deploy snapshot FAILED after 6 attempts — failing closed BEFORE any deploy"
+            echo "Nothing has shipped. Re-run once the Cloudflare deployments API is readable again."
+            exit 1
+          fi
+          echo "previous_version_id=${PREVIOUS_VERSION_ID}" >> "$GITHUB_OUTPUT"
+
+      # PLACEHOLDER — replace with the repo's real deploy command
+      # if it is not a plain wrangler deploy (e.g. OpenNext repos
+      # run their own deploy script here). Keep --keep-vars so
+      # dashboard-managed vars survive deploys.
+      - name: Deploy to Cloudflare Workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler deploy --keep-vars
+
+      # Gate 1 (blocking, control plane): poll the deployments
+      # API until the newest deployment is a single version at
+      # 100% AND its version_id differs from the pre-deploy
+      # snapshot. Exports version_id for Gate 2.
+      - name: Gate 1 — verify deploy via Workers API
+        id: health
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          SCRIPT_NAME: ${{ vars.WORKER_NAME }}
+          PREVIOUS_VERSION_ID: ${{ steps.pre_deploy_snapshot.outputs.previous_version_id }}
+        run: |
+          set -euo pipefail
+          API_BASE="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+          API_URL="${API_BASE}/workers/scripts/${SCRIPT_NAME}/deployments"
+          for i in $(seq 1 12); do
+            RESP=$(curl -s -w $'\n%{http_code}' \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$API_URL" || echo "000")
+            CODE=$(printf '%s' "$RESP" | tail -n 1)
+            BODY=$(printf '%s' "$RESP" | sed '$d')
+            if [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e \
+              --arg prev "$PREVIOUS_VERSION_ID" '
+              .success == true
+              and ((.result.deployments | length) > 0)
+              and ((.result.deployments | sort_by(.created_on) | last) as $d
+                | (($d.versions | length) == 1)
+                  and ($d.versions[0].percentage == 100)
+                  and (($prev == "") or ($d.versions[0].version_id != $prev)))
+            ' >/dev/null; then
+              echo "$BODY" | jq -r '
+                .result.deployments | sort_by(.created_on) | last
+                | "Deployed version \(.versions[0].version_id) active at 100% "
+                + "(deployment \(.id), created \(.created_on))"'
+              VERSION_ID=$(printf '%s' "$BODY" | jq -r '
+                .result.deployments | sort_by(.created_on) | last
+                | .versions[0].version_id')
+              echo "version_id=${VERSION_ID}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "  attempt ${i}/12: HTTP ${CODE} — newest deployment not yet a single NEW version at 100%"
+            sleep 10
+          done
+          echo "Deploy verification failed — newest deployment is not a single NEW version at 100% after 12 attempts"
+          exit 1
+
+      # Gate 2 infrastructure: deploy the checker Worker and sync
+      # its secret from the GitHub secret on EVERY run, so the
+      # checker can never drift. workers_dev is enabled for the
+      # CHECKER only — the app's stays disabled.
+      # The secret is bound via env:, never inlined into the run:
+      # script text (GitHub substitutes expressions before bash
+      # parses, so a rotated secret with shell metacharacters
+      # could break the command or store a transformed value).
+      - name: Deploy Gate 2 checker Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          DEPLOY_CHECK_SECRET: ${{ secrets.DEPLOY_CHECK_SECRET }}
+        run: |
+          set -euo pipefail
+          bunx wrangler deploy -c workers/deploy-check/wrangler.jsonc
+          if [ -z "$DEPLOY_CHECK_SECRET" ]; then
+            echo "DEPLOY_CHECK_SECRET GitHub secret is not set — cannot sync the checker secret"
+            exit 1
+          fi
+          printf '%s' "$DEPLOY_CHECK_SECRET" | bunx wrangler secret put \
+            DEPLOY_CHECK_SECRET -c workers/deploy-check/wrangler.jsonc
+
+      # Gate 2 (blocking, content): Gate 1 proved the control
+      # plane maps traffic to the new version; it cannot prove
+      # the Worker executes or serves healthy content. Poll the
+      # checker's workers.dev URL — the checker fetches the
+      # health path via its APP service binding, so no request
+      # traverses the public zone or Bot Fight Mode.
+      # PASS = HTTP 200 AND status "healthy" AND workerVersion
+      # == Gate 1's version_id. (Static variant: assert
+      # .sha == github.sha instead of .workerVersion.)
+      #
+      # Classification, in this order, per attempt:
+      #   1. cf-mitigated: challenge -> PROBE failure.
+      #   2. Health JSON verdict (body parses, has status):
+      #      healthy + version match -> PASS; unhealthy or
+      #      version mismatch -> APP failure.
+      #   3. appCrash envelope, OR a passthrough response
+      #      (X-Deploy-Check: origin) with status >= 500 and a
+      #      non-JSON body -> APP failure. Any exception from
+      #      the checker's binding fetch is the app's by
+      #      provenance (its exceptions tunnel to the caller);
+      #      the only probe-class exception is the platform's
+      #      "Worker not found" binding-resolution failure,
+      #      which the checker maps to a probeError envelope.
+      #   4. probeError envelope / checker unreachable /
+      #      non-JSON without the origin header -> PROBE.
+      # Rollback uses ONLY the FINAL attempt's class: on
+      # exhaustion app_failure is set only if the last attempt
+      # was app-class. A final PROBE failure fails the job
+      # loudly but never rolls back.
+      - name: Gate 2 — content health via checker Worker
+        id: gate2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          EXPECTED_VERSION: ${{ steps.health.outputs.version_id }}
+          DEPLOY_CHECK_SECRET: ${{ secrets.DEPLOY_CHECK_SECRET }}
+          WORKER_NAME: ${{ vars.WORKER_NAME }}
+          CHECKER_NAME: ${{ vars.CHECKER_NAME }}
+        run: |
+          set -euo pipefail
+          SUBDOMAIN=$(curl -s \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain" \
+            | jq -r '.result.subdomain // empty')
+          if [ -z "$SUBDOMAIN" ]; then
+            echo "PROBE FAILURE — could not resolve the account workers.dev subdomain"
+            echo "Deploy NOT rolled back — fix the probe."
+            exit 1
+          fi
+          CHECKER="${CHECKER_NAME:-${WORKER_NAME}-deploy-check}"
+          CHECK_URL="https://${CHECKER}.${SUBDOMAIN}.workers.dev/"
+          echo "Polling ${CHECK_URL} — expecting workerVersion ${EXPECTED_VERSION}"
+          LAST_CLASS=""
+          SAW_APP=""
+          LAST_DETAIL="no attempt completed"
+          for i in $(seq 1 9); do
+            RESP=$(curl -s -D /tmp/gate2-headers.txt -w $'\n%{http_code}' \
+              -H "X-Deploy-Check-Secret: ${DEPLOY_CHECK_SECRET}" "$CHECK_URL" || true)
+            CODE=$(printf '%s' "$RESP" | tail -n 1)
+            BODY=$(printf '%s' "$RESP" | sed '$d')
+            HEADERS=$(cat /tmp/gate2-headers.txt 2>/dev/null || true)
+            XDC=$(printf '%s' "$HEADERS" | grep -i '^x-deploy-check:' | tail -n 1 \
+              | cut -d: -f2- | tr -d ' \r' | tr '[:upper:]' '[:lower:]' || true)
+            MITIGATED=$(printf '%s' "$HEADERS" | grep -i '^cf-mitigated:' | tail -n 1 \
+              | cut -d: -f2- | tr -d '\r' || true)
+            if printf '%s' "$MITIGATED" | grep -qi 'challenge'; then
+              LAST_CLASS="probe"
+              LAST_DETAIL="probe failure (cf-mitigated challenge, HTTP ${CODE}): ${BODY}"
+            elif [ "$CODE" = "200" ] && printf '%s' "$BODY" | jq -e \
+              --arg v "$EXPECTED_VERSION" \
+              '.status == "healthy" and .workerVersion == $v' >/dev/null 2>&1; then
+              LAST_CLASS="pass"
+              echo "  attempt ${i}/9 [pass]: healthy, version ${EXPECTED_VERSION} serving"
+              echo "Gate 2 PASS — health healthy, version ${EXPECTED_VERSION} serving"
+              exit 0
+            elif printf '%s' "$BODY" | jq -e 'has("status")' >/dev/null 2>&1; then
+              LAST_CLASS="app"
+              SAW_APP="true"
+              LAST_DETAIL="app verdict (HTTP ${CODE}): ${BODY}"
+            elif printf '%s' "$BODY" | jq -e '.appCrash == true' >/dev/null 2>&1 || [ "$XDC" = "app-crash" ]; then
+              LAST_CLASS="app"
+              SAW_APP="true"
+              LAST_DETAIL="app crash (HTTP ${CODE}, X-Deploy-Check: ${XDC:-none}): ${BODY}"
+            elif printf '%s' "$BODY" | jq -e '.probeError' >/dev/null 2>&1; then
+              LAST_CLASS="probe"
+              LAST_DETAIL="probe error (HTTP ${CODE}): ${BODY}"
+            elif [ "$XDC" = "origin" ] && [ "$CODE" -ge 500 ] 2>/dev/null \
+              && ! printf '%s' "$BODY" | jq -e . >/dev/null 2>&1; then
+              LAST_CLASS="app"
+              SAW_APP="true"
+              LAST_DETAIL="app crash passthrough (HTTP ${CODE}, X-Deploy-Check: origin, non-JSON body): ${BODY}"
+            else
+              LAST_CLASS="probe"
+              LAST_DETAIL="probe failure (HTTP ${CODE}, XDC: ${XDC:-none}, no verdict): ${BODY}"
+            fi
+            echo "  attempt ${i}/9 [${LAST_CLASS}]: ${LAST_DETAIL}"
+            sleep 10
+          done
+          if [ "$LAST_CLASS" = "app" ]; then
+            echo "app_failure=true" >> "$GITHUB_OUTPUT"
+            echo "Gate 2 FAIL — app unhealthy, crashed, or wrong version after retries"
+            echo "   Last verdict [${LAST_CLASS}]: ${LAST_DETAIL}"
+          else
+            echo "PROBE FAILURE — final persistent state is a probe failure"
+            echo "   Last result [${LAST_CLASS:-none}]: ${LAST_DETAIL}"
+            if [ "$SAW_APP" = "true" ]; then
+              echo "   Note: earlier app verdicts seen, final state is probe — NOT rolling back"
+            fi
+            echo "   Deploy NOT rolled back — fix the probe (checker Worker / subdomain)."
+          fi
+          exit 1
+
+      # Roll back on Gate 1 failure (deploy did not land) or a
+      # Gate 2 final APP verdict. A Gate 2 final PROBE failure
+      # never reaches this step: gate2 exits 1 without setting
+      # app_failure, so the condition stays false and only the
+      # job fails.
+      - name: Rollback on failed health gate
+        if: failure() && (steps.health.outcome == 'failure' || steps.gate2.outputs.app_failure == 'true')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          echo "Rolling back to previous Worker version..."
+          bunx wrangler rollback --message "Auto-rollback: post-deploy health gate failed" 2>&1 || true
+          echo "Rollback attempted — verify manually in the Cloudflare dashboard."
+
+      - name: Release marker
+        if: always()
+        run: |
+          {
+            echo "RELEASE_SHA=${GITHUB_SHA::7}"
+            echo "RELEASE_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_STEP_SUMMARY"

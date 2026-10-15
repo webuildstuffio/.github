@@ -1,0 +1,6 @@
+{
+  "name": "Deploy to Cloudflare (health-gated)",
+  "description": "Cloudflare Worker deploy with Gate 1 (deployments API) + Gate 2 (service-binding health checker) and auto-rollback; inert until CF_DEPLOY_ENABLED=true. See DEPLOY-STANDARD.md in gh-actions-and-skills.",
+  "iconName": "icon.png",
+  "categories": ["Continuous deployment"]
+}
