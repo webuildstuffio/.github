@@ -16,6 +16,9 @@ Default community-health + automation files for every repo in the org.
 - `.github/ISSUE_TEMPLATE/` — default issue forms (auto-label
   type:* + needs-triage).
 - `.github/pull_request_template.md` — default PR template.
+- `NOTIFICATIONS.md` — quiet-by-default policy: every repo is
+  Ignored for the owner (no email or push notifications), and
+  how that default is enforced for new repos.
 
 New repos get the label definitions automatically: repos created
 from repo-template-vite / repo-template-nextjs carry the files,
