@@ -30,7 +30,7 @@ the repo is explicitly Ignored.
    ```bash
    for r in $(gh repo list webuildstuffio --limit 200 --json nameWithOwner -q '.[].nameWithOwner') \
             $(gh repo list nichm --limit 200 --json nameWithOwner -q '.[].nameWithOwner') \
-            $(gh api 'user/subscriptions?per_page=100' --jq '.[].full_name'); do
+            $(gh api --paginate 'user/subscriptions?per_page=100' --jq '.[].full_name'); do
      gh api -X PUT "repos/$r/subscription" -F ignored=true
    done
    ```
