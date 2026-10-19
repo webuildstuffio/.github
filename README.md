@@ -4,6 +4,8 @@ Default community-health + automation files for every repo in the org.
 
 ## Contents
 
+- `CLOUDFLARE-BASELINE.md` — the fleet Cloudflare edge baseline (TLS, Bot Fight Mode gating, SSL strict, DNSSEC, HSTS) every public zone is held to.
+
 - `.github/master-labels.yaml` — canonical Fleet Label Schema v4
   (49 generic labels: P0-P4 priority, type:*, status:*, themes,
   effort:*, agent helpers). Mirrored in gh-actions-and-skills

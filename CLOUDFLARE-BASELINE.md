@@ -20,12 +20,12 @@ when a new site launches.
 | HTTP/3, Brotli, WebSockets | on | modern transport defaults |
 | Always Online | off | never serve stale archive.org snapshots to crawlers |
 | Development mode | off | cache bypass is for debugging only |
-| Bot Fight Mode | on* | blocks junk automation; verified bots still pass |
+| Bot Fight Mode | on for browser-facing zones; OFF for zones serving webhooks, APIs, monitoring or CI traffic* | blocks junk automation on public sites. On machine-traffic zones BFM challenges legitimate non-browser clients and silently breaks them — the ingest incident below is the worked example; gate it there instead. Verified bots are generally exempt on browser-facing zones, but the exemption is not absolute |
 | AI bot protections (`ai_bots_protection`, `ai_training`) | disabled | ALL crawlers allowed, incl. AI training — training inclusion feeds AI-answer citations (owner policy 2026-10-05) |
 | DNSSEC | enabled | signed DNS answers. Cloudflare-Registrar domains complete automatically (Cloudflare publishes the DS; expect hours of `pending`). External registrars: paste the DS the zone provides |
 | HSTS | on, max-age ≥ 31536000 (1y) | browsers refuse HTTP after first visit. `includeSubDomains` only after every web hostname in the zone verifies HTTPS-clean; otherwise apex-only. Preload-list submission is owner-only |
 | URL normalization | scope `both`, type `cloudflare` | canonicalizes incoming + origin-bound URLs so rules/cache see one form; never redirects and does NOT touch trailing slashes (slash policy = redirect rules / origin / worker `html_handling`) |
-| SSL mode | full / strict where the origin serves a valid cert | `flexible` is load-bearing on origins with no TLS (bankstatementsaver.com, statementsaver.com, comicgreeting.com, talkedit.ai, unlimited.land, findtracks.app) and normal on worker-served landings — never raise without verifying the origin cert first |
+| SSL mode | **Full (strict) wherever the origin serves a valid cert** — plain Full only where the origin cert cannot validate (self-signed / expired / name mismatch) | `flexible` is load-bearing on origins with no TLS (bankstatementsaver.com, statementsaver.com, comicgreeting.com, talkedit.ai, unlimited.land, findtracks.app) and normal on worker-served landings — never raise without verifying the origin cert first |
 
 \* **Exception: `webuildstuff.dev` — Bot Fight Mode stays OFF.** It
 serves `ingest.webuildstuff.dev`, the token-authed CI ingest API; BFM
