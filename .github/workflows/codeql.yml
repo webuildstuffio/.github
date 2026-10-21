@@ -1,0 +1,58 @@
+# CodeQL — actions language only, proportionate to this repo.
+#
+# Languages actually present (checked for issue #12): none of
+# CodeQL's compiled/code languages — no JavaScript/TypeScript,
+# Python, Go, Rust, etc. `gh api .../languages` returns {} and
+# the tree is Markdown/profile content plus YAML. The only
+# executable surface CodeQL supports here is GitHub Actions
+# workflow YAML, so this workflow analyses `actions` only.
+#
+# This is the advanced (workflow) setup, free on public repos.
+# It replaces — and conflicts with — CodeQL *default* setup:
+# do NOT also enable default setup in Settings -> Code
+# security, or GitHub will refuse to run one of the two.
+# If the owner prefers default setup instead, delete this
+# file first, then enable it in the settings UI.
+
+name: CodeQL
+'on':
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  schedule:
+    - cron: '0 10 * * 1' # Mondays 10:00 UTC (after security-scan)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Initialize CodeQL
+        # github/codeql-action v4.39.1
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
+        with:
+          languages: actions
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        # github/codeql-action v4.39.1
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
+        with:
+          category: "/language:actions"

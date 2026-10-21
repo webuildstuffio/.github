@@ -1,0 +1,42 @@
+# webuildstuffio org standard — GitHub Actions only variant.
+# This repo has no package-manager manifests (no package.json,
+# Cargo.toml, pyproject.toml, requirements.txt or Dockerfile —
+# verified for issue #12): it is Markdown/profile content plus
+# workflow YAML, so github-actions is the only ecosystem
+# actually present. No bun entry (and no versioning-strategy,
+# which is bun/npm-only config here).
+# Policy: 5-day cooldown on every entry, monthly, grouped.
+# NOTE: dependency-type omitted = includes all types (dev +
+# prod). "all" is NOT a valid value — Dependabot rejects it.
+# NOTE: schedule.day is omitted — GitHub ignores it with
+# interval: "monthly" (monthly runs on the 1st).
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "05:00"
+    cooldown:
+      default-days: 5
+    rebase-strategy: "auto"
+    open-pull-requests-limit: 10
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+        patterns:
+          - "*"
+      actions-major:
+        update-types:
+          - "major"
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "monthly-update"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
