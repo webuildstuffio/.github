@@ -20,6 +20,16 @@
 #   run summary + annotations instead. See PR for issue #12.
 # - Sequential steps instead of the reusable's parallel group
 #   (same scanners, one less moving part in a vendored copy).
+# - Hardened past the reusable on Codex review (PR #13): the
+#   tool cache is restored for real on PR runs (never
+#   lookup-only, which reports a hit without downloading);
+#   scanner reports are validated (a missing report fails the
+#   job instead of reading as zero findings); OSV severities
+#   are computed from the CVSS vector (the reusable's
+#   `tonumber?` scores every vector-scored vuln "unknown");
+#   Trivy secret/license HIGH/CRITICAL findings count in
+#   the deep gate, not just vulnerabilities. The reusable
+#   still has the last two flaws — worth an upstream fix.
 #
 # Tools (checksum-verified release downloads, exact pins):
 #   Betterleaks 1.9.0, osv-scanner 2.6.0, Trivy 0.74.0
@@ -105,9 +115,6 @@ jobs:
             security-tools-v2-bl${{ env.BETTERLEAKS_VERSION }}-osv${{
             env.OSV_SCANNER_VERSION }}-trivy${{ env.TRIVY_VERSION }}-${{
             runner.os }}-${{ runner.arch }}
-          lookup-only: >-
-            ${{ steps.scope.outputs.deep != 'true' }}
-
       - name: Install tools (cold cache only)
         if: >-
           steps.activity.outputs.active != 'false' &&
@@ -167,6 +174,21 @@ jobs:
         if: steps.activity.outputs.active != 'false'
         run: echo "$TOOLS_DIR/bin" >> "$GITHUB_PATH"
 
+      # Fail-closed guard (vendored hardening, Codex review on
+      # PR #13): the scan steps below tolerate scanner exit codes
+      # (findings are data, not errors), so a missing binary would
+      # otherwise manufacture empty reports and a green check.
+      # Verify every scanner this run needs actually executes.
+      - name: Verify tools are present
+        if: steps.activity.outputs.active != 'false'
+        run: |
+          set -euo pipefail
+          betterleaks version
+          osv-scanner --version
+          if [ "${{ steps.scope.outputs.deep }}" = "true" ]; then
+            trivy --version
+          fi
+
       - name: Betterleaks secret scan (diff-only on fast path)
         id: betterleaks
         if: steps.activity.outputs.active != 'false'
@@ -187,8 +209,14 @@ jobs:
               --report-path /tmp/betterleaks.json --exit-code 0 \
               --redact=100 . 2>/dev/null || true
           fi
-          [ -f /tmp/betterleaks.json ] \
-            || echo '[]' > /tmp/betterleaks.json
+          # A missing/unparseable report is a scanner failure,
+          # not "zero findings" — fail closed (PR #13 review).
+          if [ ! -f /tmp/betterleaks.json ] \
+            || ! jq -e 'type == "array"' /tmp/betterleaks.json \
+              >/dev/null 2>&1; then
+            echo "::error::betterleaks produced no valid report"
+            exit 1
+          fi
           echo "duration=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
           total=$(jq 'if type == "array" then length else 0 end' \
             /tmp/betterleaks.json 2>/dev/null || echo 0)
@@ -222,15 +250,78 @@ jobs:
           fi
           extract() {
             jq -r '
-              def cvss: ([.severity[]?
-                | select(.type | startswith("CVSS"))
-                | .score | tonumber?] | max // 0);
-              def sev: cvss as $s
-                | if $s >= 9 then "critical"
-                  elif $s >= 7 then "high"
-                  elif $s >= 4 then "medium"
-                  elif $s > 0 then "low"
-                  else "unknown" end;
+              # OSV severity[].score is a CVSS *vector* string
+              # (e.g. "CVSS:3.1/AV:N/AC:L/..."), not a number —
+              # the reusable plain `tonumber?` dropped every
+              # vector-scored vuln to "unknown" (PR #13 review).
+              # Compute the CVSS v3.x base score from the vector
+              # (FIRST v3.1 spec, section 7 equations); numeric
+              # scores pass through; GHSA database_specific
+              # severity is the fallback for v2/v4 vectors.
+              def roundup: ((. * 10 - 0.0000001) | ceil) / 10;
+              def vmap($vec; $k):
+                ($vec | split("/")
+                 | map(split(":"))
+                 | map({(.[0]): .[1]}) | add)[$k] // "";
+              def cvss3($score):
+                ($score | sub("^CVSS:3\\.[01]/"; "")) as $vec
+                | ({N: 0.85, A: 0.62, L: 0.55, P: 0.2}
+                    [vmap($vec; "AV")] // 0) as $av
+                | ({L: 0.77, H: 0.44}
+                    [vmap($vec; "AC")] // 0) as $ac
+                | (vmap($vec; "S")) as $s
+                | ((if $s == "C"
+                    then {N: 0.85, L: 0.68, H: 0.50}
+                    else {N: 0.85, L: 0.62, H: 0.27} end)
+                    [vmap($vec; "PR")] // 0) as $pr
+                | ({N: 0.85, R: 0.62}
+                    [vmap($vec; "UI")] // 0) as $ui
+                | ({H: 0.56, L: 0.22, N: 0}
+                    [vmap($vec; "C")] // 0) as $c
+                | ({H: 0.56, L: 0.22, N: 0}
+                    [vmap($vec; "I")] // 0) as $i
+                | ({H: 0.56, L: 0.22, N: 0}
+                    [vmap($vec; "A")] // 0) as $a
+                | (1 - (1 - $c) * (1 - $i) * (1 - $a)) as $iss
+                | (if $s == "C"
+                   then 7.52 * ($iss - 0.029)
+                     - 3.25 * pow($iss - 0.02; 15)
+                   else 6.42 * $iss end) as $impact
+                | (8.22 * $av * $ac * $pr * $ui) as $expl
+                | if $impact <= 0 then 0
+                  elif $s == "C"
+                  then ([1.08 * ($impact + $expl), 10] | min
+                    | roundup)
+                  else ([$impact + $expl, 10] | min | roundup)
+                  end;
+              def score_of($sev):
+                if ($sev.score
+                    | test("^[0-9]+(\\.[0-9]+)?$"))
+                then ($sev.score | tonumber)
+                elif ($sev.score | startswith("CVSS:3"))
+                then cvss3($sev.score)
+                else 0 end;
+              def cvss: ([.severity[]? | score_of(.)]
+                | max // 0);
+              def ghsa:
+                (.database_specific.severity // ""
+                 | ascii_downcase
+                 | {critical: "critical", high: "high",
+                    moderate: "medium", medium: "medium",
+                    low: "low"}[.] // "");
+              def band($s):
+                if $s >= 9 then "critical"
+                elif $s >= 7 then "high"
+                elif $s >= 4 then "medium"
+                elif $s > 0 then "low"
+                else "" end;
+              def sev:
+                ([band(cvss), ghsa] | map(select(. != ""))
+                 | if index("critical") then "critical"
+                   elif index("high") then "high"
+                   elif index("medium") then "medium"
+                   elif index("low") then "low"
+                   else "unknown" end);
               .results[]?.packages[]?
               | .package as $p
               | .vulnerabilities[]?
@@ -263,7 +354,17 @@ jobs:
           trivy fs --scanners vuln,secret,license \
             --format json --output /tmp/trivy.json . \
             2>/dev/null || true
-          [ -f /tmp/trivy.json ] || echo '{}' > /tmp/trivy.json
+          # Fail closed on a missing/unparseable report, same
+          # as the Betterleaks step (PR #13 review).
+          if [ ! -f /tmp/trivy.json ] \
+            || ! jq -e 'type == "object"' /tmp/trivy.json \
+              >/dev/null 2>&1; then
+            echo "::error::trivy produced no valid report"
+            exit 1
+          fi
+          # Count all three scanner classes, not just vulns:
+          # Secrets[] and Licenses[] carry Severity too, and
+          # the deep gate below claims all three (PR #13).
           {
             echo "duration=$((SECONDS - start))"
             echo "high=$(jq \
@@ -272,6 +373,22 @@ jobs:
               /tmp/trivy.json)"
             echo "critical=$(jq \
               '[.Results[]?.Vulnerabilities[]?
+                | select(.Severity == "CRITICAL")] | length' \
+              /tmp/trivy.json)"
+            echo "secret_high=$(jq \
+              '[.Results[]?.Secrets[]?
+                | select(.Severity == "HIGH")] | length' \
+              /tmp/trivy.json)"
+            echo "secret_critical=$(jq \
+              '[.Results[]?.Secrets[]?
+                | select(.Severity == "CRITICAL")] | length' \
+              /tmp/trivy.json)"
+            echo "license_high=$(jq \
+              '[.Results[]?.Licenses[]?
+                | select(.Severity == "HIGH")] | length' \
+              /tmp/trivy.json)"
+            echo "license_critical=$(jq \
+              '[.Results[]?.Licenses[]?
                 | select(.Severity == "CRITICAL")] | length' \
               /tmp/trivy.json)"
           } >> "$GITHUB_OUTPUT"
@@ -298,7 +415,13 @@ jobs:
             if [ "${{ steps.scope.outputs.deep }}" = "true" ]; then
               echo "| trivy (deep) | \
                 ${{ steps.trivy.outputs.high }} high, \
-                ${{ steps.trivy.outputs.critical }} critical | n/a | \
+                ${{ steps.trivy.outputs.critical }} critical vuln; \
+                ${{ steps.trivy.outputs.secret_high }} high, \
+                ${{ steps.trivy.outputs.secret_critical }} \
+                critical secret; \
+                ${{ steps.trivy.outputs.license_high }} high, \
+                ${{ steps.trivy.outputs.license_critical }} \
+                critical license | n/a | \
                 ${{ steps.trivy.outputs.duration }}s |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -329,7 +452,11 @@ jobs:
             (steps.osv.outputs.high > 0 ||
              steps.osv.outputs.critical > 0 ||
              steps.trivy.outputs.high > 0 ||
-             steps.trivy.outputs.critical > 0)))
+             steps.trivy.outputs.critical > 0 ||
+             steps.trivy.outputs.secret_high > 0 ||
+             steps.trivy.outputs.secret_critical > 0 ||
+             steps.trivy.outputs.license_high > 0 ||
+             steps.trivy.outputs.license_critical > 0)))
         run: |
           echo "Security scan findings (must-be-clean):"
           echo "  betterleaks=${{ steps.betterleaks.outputs.total }}"
@@ -338,5 +465,10 @@ jobs:
           echo "  osv head: ${{ steps.osv.outputs.high }} high / \
             ${{ steps.osv.outputs.critical }} critical"
           echo "  trivy: ${{ steps.trivy.outputs.high }} high / \
-            ${{ steps.trivy.outputs.critical }} critical"
+            ${{ steps.trivy.outputs.critical }} critical vuln, \
+            ${{ steps.trivy.outputs.secret_high }} high / \
+            ${{ steps.trivy.outputs.secret_critical }} critical \
+            secret, ${{ steps.trivy.outputs.license_high }} high / \
+            ${{ steps.trivy.outputs.license_critical }} critical \
+            license"
           exit 1
