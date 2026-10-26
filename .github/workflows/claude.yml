@@ -771,6 +771,11 @@ jobs:
 
       - name: Install dependencies
 
+        # This repo has no package.json by design (org defaults
+        # only); an unconditional install fails before Claude starts.
+
+        if: hashFiles('package.json') != ''
+
         run: bun install --frozen-lockfile
 
 
