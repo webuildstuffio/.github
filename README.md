@@ -6,6 +6,8 @@ Default community-health + automation files for every repo in the org.
 
 - `CLOUDFLARE-BASELINE.md` — the fleet Cloudflare edge baseline (TLS, Bot Fight Mode gating, SSL strict, DNSSEC, HSTS) every public zone is held to.
 
+- **Analytics standard** (repo-review#291): Web Analytics + Zaraz + GA4 setup for new sites lives in the repo templates — `docs/ANALYTICS.md` in [repo-template-nextjs](https://github.com/webuildstuffio/repo-template-nextjs/blob/main/docs/ANALYTICS.md) and [repo-template-vite](https://github.com/webuildstuffio/repo-template-vite/blob/main/docs/ANALYTICS.md). WA beacon via a deploy-time repo variable (never committed; auto-install does not inject on Worker-assets sites), the Zaraz GA4 tool + activation rule, and the `settings/zaraz` API routes. Follow the template matching the site's stack.
+
 - `.github/master-labels.yaml` — canonical Fleet Label Schema v4
   (49 generic labels: P0-P4 priority, type:*, status:*, themes,
   effort:*, agent helpers). Mirrored in gh-actions-and-skills
