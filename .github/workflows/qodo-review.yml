@@ -26,6 +26,9 @@
 #          job timeout-minutes 8 -> 15: one run makes several tool
 #          calls, each with its own fallback chain, and at 180s a call
 #          the old cap could kill the job mid-run on a slow day.
+# v3.3.2: (Oct 26 2026) Fix: pr-agent v0.48 turns namespace-wide settings
+#          off by default; set config.global_settings_repo in the step env
+#          so webuildstuffio/pr-agent-settings keeps applying (#102).
 # v3.3.1: (Sep 30 2026) Fix: issue_comment events cancelled in-progress PR reviews
 #          via shared concurrency group. Root cause: GH Actions evaluates concurrency
 #          BEFORE job-level 'if:', so any bot comment entering the same group killed
