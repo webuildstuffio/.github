@@ -28,8 +28,8 @@ the repo is explicitly Ignored.
 3. **Manual run**, any time:
 
    ```bash
-   for r in $(gh repo list webuildstuffio --limit 200 --json nameWithOwner -q '.[].nameWithOwner') \
-            $(gh repo list nichm --limit 200 --json nameWithOwner -q '.[].nameWithOwner') \
+   for r in $(gh api --paginate 'orgs/webuildstuffio/repos?per_page=100' --jq '.[].full_name') \
+            $(gh api --paginate 'user/repos?per_page=100&affiliation=owner' --jq '.[].full_name') \
             $(gh api --paginate 'user/subscriptions?per_page=100' --jq '.[].full_name'); do
      gh api -X PUT "repos/$r/subscription" -F ignored=true
    done
